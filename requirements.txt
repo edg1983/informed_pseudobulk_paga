@@ -1,0 +1,21 @@
+# Core Single-Cell & Data Science Libraries
+scanpy>=1.9.3
+anndata>=0.10.0
+pandas>=2.0.0
+numpy>=1.23.0
+scikit-learn>=1.3.0
+scipy>=1.10.0
+python-igraph>=0.10.0
+leidenalg>=0.10.0
+
+# --- GPU Acceleration (Optional but Recommended) ---
+# Uncomment the following lines to enable GPU support.
+# IMPORTANT: Select the cupy version that matches your CUDA installation (check with nvcc --version)
+
+rapids-singlecell>=0.5.0
+
+# For CUDA 11.x:
+# cupy-cuda11x
+# For CUDA 12.x:
+
+cupy-cuda12x
