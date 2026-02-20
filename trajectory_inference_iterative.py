@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import anndata as ad
 import warnings
+import argparse
 import gc
 from sklearn.decomposition import IncrementalPCA
 from scipy import sparse
@@ -235,7 +236,9 @@ class LargeScaleTrajectory:
         # and stricter thresholds downstream to clean up the graph.
         level_thresholds = {
             self.hierarchy_levels[0]: 0.01,  # lineage_1 (Very lenient for root branches)
-            self.hierarchy_levels[1]: 0.03,  # lineage_2
+            self.hierarchy_levels[1]: 0.01,  # lineage_2
+            self.hierarchy_levels[2]: 0.03,  # celltype_1
+            self.hierarchy_levels[3]: 0.05,  # celltype_2
             self.hierarchy_levels[-1]: 0.05  # celltype_3 (Stricter for fine clusters)
         }
         self.compute_hierarchical_paga(root_label=root_label, thresholds=level_thresholds)
