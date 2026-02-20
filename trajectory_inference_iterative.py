@@ -273,12 +273,32 @@ class LargeScaleTrajectory:
     def compute_visualization_layout(self):
         print("🎨 Computing visualization layouts...")
         lib = rsc if GPU_AVAILABLE else sc
+
         if 'X_umap' not in self.adata.obsm:
             print("   Computing UMAP...")
             lib.tl.umap(self.adata)
 
         print("   Computing ForceAtlas2 layout (PAGA-initialized)...")
-        lib.tl.draw_graph(self.adata, init_pos='paga')
+        if GPU_AVAILABLE:
+            # RAPIDS bug workaround: rsc.tl.draw_graph hard-codes
+            # neighbors_key='connectivities' when calling Scanpy's
+            # get_init_pos_from_paga, causing it to look for uns['connectivities']
+            # as a neighbours *dict* instead of the matrix in obsp.
+            # Fix: compute PAGA init coords manually with the correct
+            # neighbors_key='neighbors', then pass them as a plain numpy array
+            # to draw_graph, bypassing the broken 'paga' branch entirely.
+            from scanpy.tools._utils import get_init_pos_from_paga
+            print("   Pre-computing PAGA init positions for GPU layout...")
+            # sc.pl.paga (not sc.tl.paga) is the function that writes
+            # adata.uns['paga']['pos'], which get_init_pos_from_paga requires.
+            if 'pos' not in self.adata.uns.get('paga', {}):
+                sc.pl.paga(self.adata, show=False)
+            init_coords = get_init_pos_from_paga(
+                self.adata, random_state=0, neighbors_key='neighbors'
+            )
+            lib.tl.draw_graph(self.adata, init_pos=init_coords)
+        else:
+            sc.tl.draw_graph(self.adata, init_pos='paga')
         self._ensure_cpu()
 
     def plot_results(self, color_by='dpt_pseudotime', save_prefix='trajectory'):
