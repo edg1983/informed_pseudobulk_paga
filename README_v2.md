@@ -295,6 +295,7 @@ usage: trajectory_inference_iterative_v2.py [-h] -i INPUT
 | `-i, --input` | Path to input `.h5ad` file. |
 | `--hierarchy` | Hierarchy-level column names in coarse-to-fine order (e.g. `lineage_1 lineage_2 celltype_1 celltype_2 celltype_3`). Required unless `--plots-only`. |
 | `--root-label` | Label identifying the root/progenitor cells (searched across all hierarchy levels). Required unless `--plots-only`. |
+| `--h5ad-type` | `full` | Input type: `full` (raw) or `processed` (already lightweight). |
 
 ### Mode selection
 
@@ -342,7 +343,6 @@ usage: trajectory_inference_iterative_v2.py [-h] -i INPUT
 | Flag | Default | Description |
 |---|---|---|
 | `-o, --output` | `trajectory_results.h5ad` | Path for the output `.h5ad` file. |
-| `--h5ad-type` | `full` | Input type: `full` (raw) or `processed` (already lightweight). |
 
 ---
 
