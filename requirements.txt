@@ -12,7 +12,18 @@ leidenalg>=0.10.0
 # Uncomment the following lines to enable GPU support.
 # IMPORTANT: Select the cupy version that matches your CUDA installation (check with nvcc --version)
 
-rapids-singlecell>=0.5.0
+rapids-singlecell>=0.14.1
+cudf-cu12==26.2.*
+dask-cudf-cu12==26.2.*
+cuml-cu12==26.2.*
+cugraph-cu12==26.2.*
+nx-cugraph-cu12==26.2.*
+cuxfilter-cu12==26.2.*
+cucim-cu12==26.2.*
+pylibraft-cu12==26.2.*
+raft-dask-cu12==26.2.*
+cuvs-cu12==26.2.*
+nx-cugraph-cu12==26.2.*
 
 # For CUDA 11.x:
 # cupy-cuda11x

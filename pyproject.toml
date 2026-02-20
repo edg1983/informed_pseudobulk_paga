@@ -1,0 +1,32 @@
+[project]
+name = "informed-pseudobulk-paga"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "anndata>=0.10.0",
+    "cucim-cu12==26.2.*",
+    "cudf-cu12==26.2.*",
+    "cugraph-cu12==26.2.*",
+    "cuml-cu12==26.2.*",
+    "cupy-cuda12x>=14.0.0",
+    "cuvs-cu12==26.2.*",
+    "cuxfilter-cu12==26.2.*",
+    "dask-cudf-cu12==26.2.*",
+    "leidenalg>=0.10.0",
+    "numpy>=1.23.0",
+    "nx-cugraph-cu12==26.2.*",
+    "pandas>=2.0.0",
+    "pylibraft-cu12==26.2.*",
+    "python-igraph>=0.10.0",
+    "raft-dask-cu12==26.2.*",
+    "rapids-singlecell>=0.14.1",
+    "scanpy>=1.9.3",
+    "scikit-learn>=1.3.0",
+    "scipy>=1.10.0",
+]
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"

@@ -4,7 +4,6 @@ import numpy as np
 import anndata as ad
 import warnings
 import gc
-import argparse
 from sklearn.decomposition import IncrementalPCA
 from scipy import sparse
 import matplotlib.pyplot as plt
@@ -21,13 +20,13 @@ except ImportError:
     print("⚠️  RAPIDS/CuPy not found. Falling back to CPU.")
 
 class LargeScaleTrajectory:
-    def __init__(self, h5ad_path, hierarchy_levels, h5ad_type="full", root_label_column=None):
+    def __init__(self, h5ad_path, hierarchy_levels, h5ad_type="full"):
         """
         Initialize the analyzer for large-scale datasets.
         """
         self.h5ad_path = h5ad_path
         self.hierarchy_levels = hierarchy_levels
-        self.finest_level = hierarchy_levels[-1]
+        self.finest_level = hierarchy_levels[-1] # celltype_3
         self.adata = None 
         if h5ad_type == "processed":
             print(f"📂 Loading pre-processed AnnData from {self.h5ad_path}...")
@@ -39,6 +38,10 @@ class LargeScaleTrajectory:
         self.adata = ad.AnnData(X=X_emb, obs=obs_df)
         self.adata.obsm['X_pca'] = X_emb
         
+        # Ensure hierarchy columns are categorical (required for PAGA mapping)
+        for level in self.hierarchy_levels:
+            self.adata.obs[level] = self.adata.obs[level].astype('category')
+            
         if save_path:
             self.adata.write(save_path)
             print(f"💾 Lightweight object saved to {save_path}")
@@ -48,48 +51,23 @@ class LargeScaleTrajectory:
         print(f"📂 Opening {self.h5ad_path} in backed mode to read metadata...")
         adata_backed = sc.read_h5ad(self.h5ad_path, backed='r')
         
-        # 1. Load Embeddings
         X_emb = None
-        
         if source == 'h5ad':
             print(f"📥 Reading embeddings from .obsm['{key}']...")
-            if key not in adata_backed.obsm.keys():
-                possible_keys = list(adata_backed.obsm.keys())
-                raise ValueError(f"Key '{key}' not found in .obsm. Available: {possible_keys}")
             X_emb = adata_backed.obsm[key][:]
-            
         elif source == 'file':
-            if not tsv_path:
-                raise ValueError("tsv_path must be provided if source='file'")
             print(f"📥 Reading embeddings from {tsv_path}...")
             sep = ',' if tsv_path.endswith('.csv') else '\t'
-            try:
-                df = pd.read_csv(tsv_path, sep=sep, index_col=0)
-            except Exception as e:
-                raise ValueError(f"Failed to read file: {e}")
+            df = pd.read_csv(tsv_path, sep=sep, index_col=0)
 
             print("   Verifying cell ID alignment...")
             h5ad_indices = adata_backed.obs_names
-            common_ids = df.index.intersection(h5ad_indices)
-            
-            if len(common_ids) == 0:
-                 raise ValueError("❌ No matching cell IDs found. Check file format.")
-            
-            if len(common_ids) < len(h5ad_indices):
-                missing_count = len(h5ad_indices) - len(common_ids)
-                raise ValueError(f"❌ Alignment incomplete. {missing_count} cells missing.")
-
             if not df.index.equals(h5ad_indices):
                 print("   ⚠️  Order mismatch detected. Re-ordering...")
-                df_reordered = df.reindex(h5ad_indices)
-                X_emb = df_reordered.values.astype(np.float32)
-                del df, df_reordered
-                gc.collect()
-            else:
-                print("   ✅ Cell order matches perfectly.")
-                X_emb = df.values.astype(np.float32)
-        else:
-            raise ValueError("source must be 'h5ad' or 'file'")
+                df = df.reindex(h5ad_indices)
+            X_emb = df.values.astype(np.float32)
+            del df
+            gc.collect()
 
         print("📑 Extracting metadata...")
         obs = adata_backed.obs[self.hierarchy_levels].copy()
@@ -111,7 +89,6 @@ class LargeScaleTrajectory:
             chunk = adata_backed[i:end].X
             if sparse.issparse(chunk): chunk = chunk.toarray()
             ipca.partial_fit(chunk)
-            if i % (batch_size * 5) == 0: gc.collect()
 
         print("📉 Transforming data...")
         X_pca = np.zeros((n_cells, n_components), dtype=np.float32)
@@ -128,61 +105,146 @@ class LargeScaleTrajectory:
         self._create_lightweight_adata(X_pca, obs, save_pca_path)
 
     def _ensure_cpu(self):
-        """Ensures all matrices are numpy/scipy arrays (CPU) before plotting or CPU-only algorithms."""
+        """Ensures all matrices are numpy/scipy arrays (CPU) before Scanpy algorithms."""
         if not GPU_AVAILABLE: return
-        
-        # Check X
-        if hasattr(self.adata.X, 'get'):
-            self.adata.X = self.adata.X.get()
-            
-        # Check obsm (embeddings)
+        if hasattr(self.adata.X, 'get'): self.adata.X = self.adata.X.get()
         for key in list(self.adata.obsm.keys()):
-            if hasattr(self.adata.obsm[key], 'get'): 
-                 self.adata.obsm[key] = self.adata.obsm[key].get()
-        
-        # Check obsp (neighbor distances & connectivities)
+            if hasattr(self.adata.obsm[key], 'get'): self.adata.obsm[key] = self.adata.obsm[key].get()
         if hasattr(self.adata, 'obsp'):
             for key in list(self.adata.obsp.keys()):
-                if hasattr(self.adata.obsp[key], 'get'):
-                     self.adata.obsp[key] = self.adata.obsp[key].get()
-                     
-        # Check uns (paga adjacency)
+                if hasattr(self.adata.obsp[key], 'get'): self.adata.obsp[key] = self.adata.obsp[key].get()
         if 'paga' in self.adata.uns:
             for key in list(self.adata.uns['paga'].keys()):
-                 if hasattr(self.adata.uns['paga'][key], 'get'):
-                      self.adata.uns['paga'][key] = self.adata.uns['paga'][key].get()
+                 if hasattr(self.adata.uns['paga'][key], 'get'): self.adata.uns['paga'][key] = self.adata.uns['paga'][key].get()
 
-    def run_gpu_trajectory(self, root_label="HSPC", n_neighbors=30, use_rep='X_pca'):
-        """Moves data to GPU (if available), computes Neighbors, PAGA, and DPT."""
+    def compute_hierarchical_paga(self, root_label, thresholds=0.05):
+        """
+        Computes PAGA iteratively from coarse to fine. 
+        Severely penalizes or removes edges between fine clusters if their 
+        coarse parent lineages are not biologically connected.
+        
+        Args:
+            root_label (str): The label of the root progenitor cells.
+            thresholds (float or dict): A single threshold for all levels, or a dictionary
+                                        mapping level names to specific thresholds.
+                                        e.g., {'lineage_1': 0.01, 'celltype_3': 0.1}
+        """
+        print("\n🌳 Starting Top-Down Hierarchical PAGA Masking...")
+        self._ensure_cpu()
+        
+        allowed_parent_edges = None
+        prev_level = None
+        
+        for level in self.hierarchy_levels:
+            # Determine threshold for this specific level
+            if isinstance(thresholds, dict):
+                current_thresh = thresholds.get(level, 0.05)
+            else:
+                current_thresh = thresholds
+                
+            print(f"   ► Computing PAGA for level: '{level}' (Threshold: {current_thresh})")
+            sc.tl.paga(self.adata, groups=level)
+            
+            paga_conn = self.adata.uns['paga']['connectivities'].toarray()
+            categories = self.adata.obs[level].cat.categories
+            
+            # --- MASKING LOGIC ---
+            if level == self.hierarchy_levels[0]:
+                # Force star topology from the root at the very first level
+                # 1. Find which top-level category contains the root_label
+                root_mask = self.adata.obs[self.finest_level] == root_label
+                if not root_mask.any():
+                    for l in reversed(self.hierarchy_levels):
+                        if (self.adata.obs[l] == root_label).any():
+                            root_mask = self.adata.obs[l] == root_label
+                            break
+                top_root_category = self.adata.obs[root_mask][level].mode()[0]
+                print(f"     👑 Enforcing root hub: only allowing edges connected to '{top_root_category}'")
+                
+                masked_top_edges = 0
+                for i, cat_i in enumerate(categories):
+                    for j, cat_j in enumerate(categories):
+                        if i == j: continue
+                        # If NEITHER category is the root category, kill the connection
+                        if cat_i != top_root_category and cat_j != top_root_category:
+                            if paga_conn[i, j] > 0:
+                                paga_conn[i, j] = 0.0
+                                masked_top_edges += 1
+                if masked_top_edges > 0:
+                    print(f"     ✂️ Severed {masked_top_edges} cross-lineage edges at the root level.")
+                    self.adata.uns['paga']['connectivities'] = sparse.csr_matrix(paga_conn)
+
+            elif allowed_parent_edges is not None:
+                # Build mapping: Find the parent category for each current category
+                # .mode()[0] safely handles minor annotation noise/errors
+                mapping = {}
+                for i, cat in enumerate(categories):
+                    parent_cat = self.adata.obs[self.adata.obs[level] == cat][prev_level].mode()[0]
+                    mapping[i] = parent_cat
+                
+                masked_edges = 0
+                for i in range(len(categories)):
+                    for j in range(len(categories)):
+                        if i == j: continue
+                        
+                        parent_i = mapping[i]
+                        parent_j = mapping[j]
+                        
+                        # If parents were NOT connected in the coarse graph, sever this fine edge
+                        if not allowed_parent_edges.get((parent_i, parent_j), False):
+                            if paga_conn[i, j] > 0:
+                                paga_conn[i, j] = 0.0
+                                masked_edges += 1
+                                
+                print(f"     ✂️ Severed {masked_edges} cross-lineage short-circuits based on '{prev_level}' rules.")
+                
+                # Update the object with the strictly pruned connectivities
+                self.adata.uns['paga']['connectivities'] = sparse.csr_matrix(paga_conn)
+
+            # --- PREPARE NEXT LEVEL RULES ---
+            allowed_parent_edges = {}
+            for i, cat_i in enumerate(categories):
+                for j, cat_j in enumerate(categories):
+                    # We allow an edge down the hierarchy if the PAGA score > current_thresh
+                    if i == j or paga_conn[i, j] >= current_thresh:
+                        allowed_parent_edges[(cat_i, cat_j)] = True
+            
+            prev_level = level
+            
+        print(f"✅ Hierarchical PAGA complete. Final strictly-bounded backbone rests on '{self.finest_level}'.\n")
+
+    def run_gpu_trajectory(self, root_label="HSPC", n_neighbors=30):
+        """Moves data to GPU, computes Neighbors, runs Hierarchical PAGA, and DPT."""
         if self.adata is None:
-            raise ValueError("Run preprocess or load embeddings first or load a preprocessed h5ad with embeddings.")
+            raise ValueError("Run preprocess or load embeddings first.")
 
         lib = rsc if GPU_AVAILABLE else sc
         print("🚀 Starting Trajectory Inference...")
         
-        print(f"🔗 Computing Neighbor Graph (k={n_neighbors}) using '{use_rep}'...")
-        lib.pp.neighbors(self.adata, n_neighbors=n_neighbors, n_pcs=50, use_rep=use_rep)
+        print(f"🔗 Computing Neighbor Graph (k={n_neighbors})...")
+        lib.pp.neighbors(self.adata, n_neighbors=n_neighbors, n_pcs=50, use_rep='X_pca')
         
-        # DPT requires diffusion maps to exist. Fast on GPU.
         print("🗺️  Computing Diffusion Maps...")
         lib.tl.diffmap(self.adata)
         
-        # Move data back to CPU because PAGA and DPT are not native to rapids_singlecell
         print("⏬ Moving data to CPU for Scanpy PAGA and DPT...")
         self._ensure_cpu()
         
-        print(f"🕸️  Computing PAGA using '{self.finest_level}' as backbone...")
-        # Explicitly use Scanpy for PAGA
-        sc.tl.paga(self.adata, groups=self.finest_level)
+        # --- NEW: Call the Hierarchical PAGA instead of standard PAGA ---
+        # Using a lenient threshold at the top to preserve all root branches, 
+        # and stricter thresholds downstream to clean up the graph.
+        level_thresholds = {
+            self.hierarchy_levels[0]: 0.01,  # lineage_1 (Very lenient for root branches)
+            self.hierarchy_levels[1]: 0.03,  # lineage_2
+            self.hierarchy_levels[-1]: 0.05  # celltype_3 (Stricter for fine clusters)
+        }
+        self.compute_hierarchical_paga(root_label=root_label, thresholds=level_thresholds)
         
         print(f"📍 Setting root to a cell in group: {root_label}")
-        # Look for the root label in the specified root level first, then fall back to the finest level
         root_mask = self.adata.obs[self.finest_level] == root_label
         if not root_mask.any():
             for level in reversed(self.hierarchy_levels):
-                print(f"   Root label '{root_label}' not found in '{self.finest_level}'. Checking '{level}'...")
                 if (self.adata.obs[level] == root_label).any():
-                    print(f"   Found root label in '{level}'. Setting root there.")
                     root_mask = self.adata.obs[level] == root_label
                     break
         
@@ -193,88 +255,55 @@ class LargeScaleTrajectory:
         self.adata.uns['iroot'] = flat_indices[0] 
         print(f"   Root index set to: {self.adata.uns['iroot']}")
 
-        print("⏳ Computing Diffusion Pseudotime (guided by PAGA)...")
-        # Explicitly use Scanpy for DPT
+        print("⏳ Computing Diffusion Pseudotime (guided by strict hierarchical PAGA)...")
         sc.tl.dpt(self.adata)
         print("✅ Trajectory inference complete.")
 
     def enforce_hierarchy_constraint(self):
-        """Validates hierarchy alignment."""
         print("🔧 Validating hierarchy alignment...")
         dpt_col = 'dpt_pseudotime'
-        summary = self.adata.obs.groupby(self.hierarchy_levels)[dpt_col].mean().reset_index()
+        summary = self.adata.obs.groupby(self.hierarchy_levels, observed=True)[dpt_col].mean().reset_index()
         summary = summary.sort_values(dpt_col)
         print(summary.head(10))
         return summary
 
     def compute_visualization_layout(self):
-        """Computes UMAP and ForceDirected Graph (FA2) for visualization."""
         print("🎨 Computing visualization layouts...")
         lib = rsc if GPU_AVAILABLE else sc
-        
-        # 1. UMAP
         if 'X_umap' not in self.adata.obsm:
             print("   Computing UMAP...")
             lib.tl.umap(self.adata)
 
-        # 2. Force Directed Layout (PAGA initialized)
-        # This creates the tree-like structure that shows branching clearly
         print("   Computing ForceAtlas2 layout (PAGA-initialized)...")
         lib.tl.draw_graph(self.adata, init_pos='paga')
-        
-        # Guarantee CPU before plotting
         self._ensure_cpu()
 
     def plot_results(self, color_by='dpt_pseudotime', save_prefix='trajectory'):
-        """
-        Generates requested plots:
-        1. UMAP with directed edges
-        2. Branching Tree (ForceAtlas2) with pseudotime
-        """
-        # Ensure layouts exist
         if 'X_draw_graph_fa' not in self.adata.obsm or 'X_umap' not in self.adata.obsm:
             self.compute_visualization_layout()
             
-        self._ensure_cpu() # Make sure data is plotting-ready
+        self._ensure_cpu()
 
-        # Define colors to plot
         keys = [self.finest_level, 'dpt_pseudotime']
-        if color_by not in keys:
-            keys.append(color_by)
+        if color_by not in keys: keys.append(color_by)
 
-        # Plot 1: UMAP with PAGA edges (Directed topology)
         print(f"📊 Plotting UMAP with PAGA edges...")
         fig_umap, ax_umap = plt.subplots(figsize=(8, 8))
         sc.pl.paga(
-            self.adata, 
-            pos=self.adata.obsm['X_umap'], 
-            show=False, 
-            ax=ax_umap,
-            edge_width_scale=0.5,
-            threshold=0.1,  # Only strong connections
-            colors=color_by
+            self.adata, pos=self.adata.obsm['X_umap'], show=False, ax=ax_umap,
+            edge_width_scale=0.5, threshold=0.01, colors=color_by
         )
         plt.title(f"Trajectory UMAP ({color_by})")
         plt.savefig(f"{save_prefix}_umap_directed.png", bbox_inches='tight')
         plt.close()
 
-        # Plot 2: Branching Tree (ForceAtlas2)
-        # This puts root on one side and branches expanding out
         print(f"📊 Plotting Branching Tree (ForceAtlas2)...")
-        
-        # We plot the cells using the FA2 layout
         sc.pl.draw_graph(
-            self.adata, 
-            color=keys, 
-            layout='fa', 
-            ncols=2,
-            show=False,
-            save=f"_{save_prefix}_branching.png"
+            self.adata, color=keys, layout='fa', ncols=2, show=False, save=f"_{save_prefix}_branching.png"
         )
         print(f"✅ Plots saved as {save_prefix}_*.png")
 
     def save_results(self, output_path):
-        """Saves the results."""
         print(f"💾 Saving results to {output_path}...")
         self.adata.write(output_path)
 
@@ -296,8 +325,6 @@ examples:
                         help="Hierarchy level column names in order (e.g., lineage_1 lineage_2 celltype_1).")
     parser.add_argument("--root-label", required=True,
                         help="Label value used to identify the root cell (e.g., HSC_MPP).")
-    parser.add_argument("--root-label-column", default=None, required=True,
-                        help="Column to search for the root label. Defaults to the last hierarchy level.")
 
     # Optional arguments
     parser.add_argument("-o", "--output", default="trajectory_results.h5ad",
@@ -336,8 +363,7 @@ if __name__ == "__main__":
     analyzer = LargeScaleTrajectory(
         h5ad_path=args.input,
         hierarchy_levels=args.hierarchy,
-        h5ad_type=args.h5ad_type,
-        root_label_column=args.root_label_column,
+        h5ad_type=args.h5ad_type
     )
 
     # 1. Load Data
@@ -353,9 +379,9 @@ if __name__ == "__main__":
 
     # 3. Check & Save
     analyzer.enforce_hierarchy_constraint()
+    analyzer.save_results(args.output)
 
     # 4. Visualize
     if not args.skip_plots:
         analyzer.plot_results(color_by=args.color_by, save_prefix=args.save_prefix)
-
-    analyzer.save_results(args.output)
+        analyzer.save_results(args.output)
