@@ -1,5 +1,6 @@
 # Virtual env
 .venv/
+__pycache__/
 
 # Test data
 test/
